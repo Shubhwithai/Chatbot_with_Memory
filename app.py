@@ -227,7 +227,7 @@ if mem0_client is not None:
             with st.spinner("Thinking..."):
                 try:
                     completion = openai_client.chat.completions.create(
-                        model="gpt-4o-mini",  
+                        model="gpt-4o",  
                         messages=messages_for_llm,
                     )
                     assistant_response = completion.choices[0].message.content
