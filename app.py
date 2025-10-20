@@ -146,15 +146,27 @@ if mem0_client is not None:
                 if memories and memories.get("count", 0) > 0:
                     st.sidebar.markdown(f"### 📋 {user_id.title()}'s Memories ({memories['count']}):")
                     for i, memory in enumerate(memories["results"], 1):
-                        st.sidebar.markdown(f"**{i}.** {memory['memory']}")
-                        # Show metadata if available
-                        if 'metadata' in memory and memory['metadata']:
-                            metadata_items = []
-                            for key, value in memory['metadata'].items():
-                                if value:
-                                    metadata_items.append(f"{key}: {value}")
-                            if metadata_items:
-                                st.sidebar.caption(" | ".join(metadata_items))
+                        # Create columns for memory text and delete button
+                        col1, col2 = st.sidebar.columns([4, 1])
+                        with col1:
+                            st.markdown(f"**{i}.** {memory['memory']}")
+                            # Show metadata if available
+                            if 'metadata' in memory and memory['metadata']:
+                                metadata_items = []
+                                for key, value in memory['metadata'].items():
+                                    if value:
+                                        metadata_items.append(f"{key}: {value}")
+                                if metadata_items:
+                                    st.caption(" | ".join(metadata_items))
+                        with col2:
+                            # Individual delete button for each memory
+                            if st.button("🗑️", key=f"sidebar_delete_{memory['id']}", help="Delete this memory"):
+                                try:
+                                    mem0_client.delete(memory_id=memory['id'])
+                                    st.sidebar.success("Memory deleted!")
+                                    st.rerun()  # Refresh to update display
+                                except Exception as e:
+                                    st.sidebar.error(f"Failed to delete: {e}")
                 else:
                     st.sidebar.info("💭 No memories found.")
             except Exception as e:
@@ -180,16 +192,33 @@ if mem0_client is not None:
 
     if submit_add and user_text and mem0_client is not None:
         try:
-            messages = [{"role": "user", "content": user_text}]
-            add_kwargs = {"user_id": user_id}
-            metadata = {"category": category} if category else None
+            # Check for duplicate memories first
+            filters = {"AND": [{"user_id": user_id}]}
+            existing_memories = mem0_client.get_all(version="v2", filters=filters, page=1, page_size=100)
             
-            if metadata:
-                add_kwargs["metadata"] = metadata
+            # Check if the memory text already exists
+            is_duplicate = False
+            if existing_memories and existing_memories.get("count", 0) > 0:
+                user_text_lower = user_text.lower().strip()
+                for memory in existing_memories["results"]:
+                    existing_text = memory["memory"].lower().strip()
+                    if user_text_lower == existing_text:
+                        is_duplicate = True
+                        break
+            
+            if is_duplicate:
+                st.sidebar.warning("⚠️ This memory already exists!")
+            else:
+                messages = [{"role": "user", "content": user_text}]
+                add_kwargs = {"user_id": user_id}
+                metadata = {"category": category} if category else None
+                
+                if metadata:
+                    add_kwargs["metadata"] = metadata
 
-            result = mem0_client.add(messages, **add_kwargs)
-            st.sidebar.success("✅ Memory added!")
-            st.rerun()  # Refresh to show new memory
+                result = mem0_client.add(messages, **add_kwargs)
+                st.sidebar.success("✅ Memory added!")
+                st.rerun()  # Refresh to show new memory
         except Exception as e:
             st.sidebar.error(f"❌ Failed: {str(e)}")
 
@@ -258,12 +287,28 @@ if mem0_client is not None:
         # Append assistant message and store conversation to memory
         st.session_state.chat_messages.append({"role": "assistant", "content": assistant_response})
         try:
-            convo_messages = [
-                {"role": "user", "content": chat_input},
-                {"role": "assistant", "content": assistant_response},
-            ]
-            add_kwargs = {"user_id": user_id}
-            mem0_client.add(convo_messages, **add_kwargs)
+            # Check for duplicate conversations before adding
+            filters = {"AND": [{"user_id": user_id}]}
+            existing_memories = mem0_client.get_all(version="v2", filters=filters, page=1, page_size=100)
+            
+            # Check if this exact user input already exists in memories
+            is_duplicate_conversation = False
+            if existing_memories and existing_memories.get("count", 0) > 0:
+                chat_input_lower = chat_input.lower().strip()
+                for memory in existing_memories["results"]:
+                    memory_text = memory["memory"].lower().strip()
+                    # Check if the user input is already captured in existing memories
+                    if chat_input_lower in memory_text or memory_text in chat_input_lower:
+                        is_duplicate_conversation = True
+                        break
+            
+            if not is_duplicate_conversation:
+                convo_messages = [
+                    {"role": "user", "content": chat_input},
+                    {"role": "assistant", "content": assistant_response},
+                ]
+                add_kwargs = {"user_id": user_id}
+                mem0_client.add(convo_messages, **add_kwargs)
         except Exception:
             pass
 
