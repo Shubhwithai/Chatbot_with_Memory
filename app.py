@@ -76,8 +76,6 @@ with st.sidebar:
     else:
         user_id = selected_option
     
-    agent_id = st.text_input("Agent ID (optional)")
-    run_id = st.text_input("Run ID (optional)")
     default_category = st.text_input("Default Metadata Category (optional)")
 
     # Check for API keys in environment variables
@@ -137,43 +135,64 @@ if mem0_client is not None:
     if mem0_client is None:
         st.sidebar.error("⚠️ Memory client not initialized. Check your Mem0 API Key.")
     else:
-        memory_action = st.sidebar.selectbox("Action", ["View Memories", "Clear Memories"])  # Add handled in main area
-
-        # View Memories
-        if memory_action == "View Memories":
+        # Checkbox to control memory display
+        show_memories = st.sidebar.checkbox("Show Memories", value=True)
+        
+        # Display memories in sidebar when checkbox is checked
+        if show_memories:
             try:
                 filters = {"AND": [{"user_id": user_id}]}
                 memories = mem0_client.get_all(version="v2", filters=filters, page=1, page_size=50)
                 if memories and memories.get("count", 0) > 0:
-                    st.sidebar.markdown("### Stored Memories:")
-                    for memory in memories["results"]:
-                        st.sidebar.markdown(f"- {memory['memory']}")
+                    st.sidebar.markdown(f"### 📋 {user_id.title()}'s Memories ({memories['count']}):")
+                    for i, memory in enumerate(memories["results"], 1):
+                        st.sidebar.markdown(f"**{i}.** {memory['memory']}")
+                        # Show metadata if available
+                        if 'metadata' in memory and memory['metadata']:
+                            metadata_items = []
+                            for key, value in memory['metadata'].items():
+                                if value:
+                                    metadata_items.append(f"{key}: {value}")
+                            if metadata_items:
+                                st.sidebar.caption(" | ".join(metadata_items))
                 else:
-                    st.sidebar.info("ℹ️ No memories found.")
+                    st.sidebar.info("💭 No memories found.")
             except Exception as e:
                 st.sidebar.error(f"❌ Failed to fetch memories: {str(e)}")
-
-        # Clear Memories
-        elif memory_action == "Clear Memories":
+        
+        # Clear Memories button
+        if st.sidebar.button("🗑️ Clear All Memories", help=f"Delete all memories for {user_id}"):
             try:
                 mem0_client.delete_all(user_id=user_id)
                 st.sidebar.success("🗑️ All memories cleared!")
+                st.rerun()  # Refresh to update memory display
             except Exception as e:
                 st.sidebar.error(f"❌ Failed to clear memories: {str(e)}")
 
-    # ------------------ User Info Section ------------------
-    st.subheader(f"👤 Current User: {user_id.title()}")
+    # ------------------ Add Memory (Sidebar) ------------------
+    st.sidebar.divider()
+    st.sidebar.header("📝 Add Memory")
     
-    # Show current memory count
-    try:
-        filters = {"AND": [{"user_id": user_id}]}
-        memories = mem0_client.get_all(version="v2", filters=filters, page=1, page_size=50)
-        current_count = memories.get("count", 0) if memories else 0
-        st.metric("Stored Memories", current_count)
-    except:
-        st.metric("Stored Memories", "Error")
+    with st.sidebar.form("add_memory_form", clear_on_submit=True):
+        user_text = st.text_area("Memory text:", height=100, placeholder="Enter memory...")
+        category = st.text_input("Category:", value=default_category, placeholder="Optional")
+        submit_add = st.form_submit_button("➕ Add Memory")
 
-    st.divider()
+    if submit_add and user_text and mem0_client is not None:
+        try:
+            messages = [{"role": "user", "content": user_text}]
+            add_kwargs = {"user_id": user_id}
+            metadata = {"category": category} if category else None
+            
+            if metadata:
+                add_kwargs["metadata"] = metadata
+
+            result = mem0_client.add(messages, **add_kwargs)
+            st.sidebar.success("✅ Memory added!")
+            st.rerun()  # Refresh to show new memory
+        except Exception as e:
+            st.sidebar.error(f"❌ Failed: {str(e)}")
+
 
     # ------------------ Chatbot (Main Area) ------------------
     st.subheader("💬 Chatbot")
@@ -227,7 +246,7 @@ if mem0_client is not None:
             with st.spinner("Thinking..."):
                 try:
                     completion = openai_client.chat.completions.create(
-                        model="gpt-4o",  
+                        model="gpt-4o-mini",  
                         messages=messages_for_llm,
                     )
                     assistant_response = completion.choices[0].message.content
@@ -244,51 +263,10 @@ if mem0_client is not None:
                 {"role": "assistant", "content": assistant_response},
             ]
             add_kwargs = {"user_id": user_id}
-            if agent_id:
-                add_kwargs["agent_id"] = agent_id
-            if run_id:
-                add_kwargs["run_id"] = run_id
             mem0_client.add(convo_messages, **add_kwargs)
         except Exception:
             pass
 
-    # ------------------ Add Memory (Main Area) ------------------
-    st.subheader(f"📝 Add Memory for {user_id.title()}")
-    st.markdown(f"Enter text below to store it as a memory for **{user_id}** using Mem0. Optionally provide metadata.")
-
-    with st.form("add_memory_form", clear_on_submit=True):
-        user_text = st.text_area("Your text", height=120, placeholder="e.g., I'm planning to watch a movie tonight. Any recommendations?")
-        category = st.text_input("Metadata Category (optional)", value=default_category)
-        col1, col2 = st.columns(2)
-        with col1:
-            include_agent = st.checkbox("Include Agent/Run IDs if provided", value=True)
-        with col2:
-            submit_add = st.form_submit_button("Add to Memory")
-
-    if submit_add and user_text and mem0_client is not None:
-        try:
-            messages = [
-                {"role": "user", "content": user_text}
-            ]
-
-            add_kwargs = {"user_id": user_id}
-            if include_agent and agent_id:
-                add_kwargs["agent_id"] = agent_id
-            if include_agent and run_id:
-                add_kwargs["run_id"] = run_id
-            metadata = {"category": category} if category else None
-
-            if metadata:
-                add_kwargs["metadata"] = metadata
-
-            result = mem0_client.add(messages, **add_kwargs)
-            st.success("✅ Memory added successfully!")
-            with st.expander("Show API payload"):
-                st.write({"messages": messages, **add_kwargs})
-            with st.expander("Show result"):
-                st.write(result)
-        except Exception as e:
-            st.error(f"❌ Failed to add memory: {str(e)}")
 else:
     st.info("ℹ️ Please set your OPENAI_API_KEY and MEM0_API_KEY environment variables to get started.")
   
